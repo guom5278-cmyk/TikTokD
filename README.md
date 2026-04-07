@@ -46,3 +46,7 @@ chmod +x build_macos.sh
 - `requirements.txt`：Python 依赖
 - `build_windows.ps1`：Windows 打包脚本
 - `build_macos.sh`：macOS 打包脚本
+
+
+## 扩展方案
+- `STABILIZER_DESIGN.md`：PR 跟踪稳定软件（AI自动识别、GPU加速、实时预览、多任务）设计文档。
