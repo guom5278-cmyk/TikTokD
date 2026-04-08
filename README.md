@@ -32,6 +32,12 @@ python3 app.py
 ```
 产物：`dist/TikTokDownloader.exe`
 
+或双击一键打包脚本（CMD）：
+```bat
+build_windows.bat
+```
+产物：`dist\TikTokDownloader.exe`
+
 ### macOS
 在终端中运行：
 ```bash
@@ -43,9 +49,12 @@ chmod +x build_macos.sh
 ## 项目结构
 - `app.py`：GUI 入口
 - `tiktok_downloader.py`：TikTok 链接解析与下载核心逻辑
+- `tests/test_tiktok_downloader.py`：核心下载逻辑单元测试
 - `requirements.txt`：Python 依赖
 - `build_windows.ps1`：Windows 打包脚本
+- `build_windows.bat`：Windows 一键打包脚本（含测试）
 - `build_macos.sh`：macOS 打包脚本
+- `.github/workflows/build-windows-exe.yml`：GitHub Actions 自动构建 Windows `.exe`
 
 
 ## 扩展方案

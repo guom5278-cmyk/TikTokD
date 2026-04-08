@@ -15,6 +15,8 @@
 
 ## 2. 功能需求拆解
 
+> 术语说明：本文中的 **PR 跟踪稳定** 指“以目标部位为参考路径进行画面稳定（Path-Referenced Stabilization）”。
+
 ### 2.1 AI 全自动识别 + 跟踪
 
 - 支持目标检测（人脸、人体、车辆、物体）并自动初始化跟踪框。
@@ -72,6 +74,17 @@
 - 手动 ROI：框选/多边形/关键点。
 - 部位级模板（示例）：头部、上半身、全身、车牌、产品主体。
 - 支持关键帧修正：用户在任意帧重设目标，系统自动插值过渡。
+
+### 2.8 PR 跟踪稳定核心功能定义
+
+- 输入：`视频帧序列 + 目标轨迹(自动/手动)`。
+- 输出：`稳定后视频 + 轨迹日志 + 黑边风险报告`。
+- 核心流程：
+  1. 轨迹去噪（卡尔曼/SG）；
+  2. 计算“目标应停留位置”（一般为画面中心或自定义锚点）；
+  3. 生成逐帧仿射变换矩阵（平移/旋转/缩放）；
+  4. 应用防黑边策略；
+  5. 编码输出并上报质量指标（抖动残差、裁切率、清晰度变化）。
 
 ## 3. 推荐技术架构
 
@@ -133,6 +146,31 @@
   - 底部时间轴（关键帧修正）。
 - **队列页**：多任务列表 + 百分比 + 状态 + 操作按钮。
 
+## 6.1 UI 状态与反馈细节（你要求的进度条与任务状态）
+
+- 任务卡片建议字段：
+  - `任务名`、`输入文件`、`输出路径`、`当前阶段`、`百分比`、`ETA`、`FPS`、`GPU显存占用`。
+- 阶段颜色建议：
+  - QUEUED（灰）/ TRACKING（蓝）/ STABILIZING（紫）/ ENCODING（青）/ DONE（绿）/ FAILED（红）。
+- 交互建议：
+  - 支持“暂停/继续/取消/重试”；
+  - 失败时提供“查看日志”和“一键重跑（降级参数）”。
+- 预览区域建议：
+  - 左右分屏：左原始、右稳定；
+  - 叠加目标框、轨迹曲线、黑边风险热区；
+  - 参数滑条实时生效，确保“所见即所得”。
+
+## 6.2 手动部位选择设计（你要求的可手选稳定部位）
+
+- 选择模式：
+  - 矩形框（最快）；
+  - 多边形（复杂目标）；
+  - 关键点（头部、肩部、车牌角点等）。
+- 关键帧机制：
+  - 用户在时间轴打关键帧修正目标；
+  - 非关键帧采用插值+局部重跟踪；
+  - 明显漂移时自动弹出“需要修正”的提示标记。
+
 ## 7. 性能目标（建议）
 
 - 1080p / 30fps / 3分钟视频：
@@ -167,9 +205,174 @@
 5. 实现实时预览与参数热更新。
 6. 增加可视化日志与导出报告。
 
+## 11. 模块接口草案（便于工程开工）
+
+```python
+class TrackingRequest:
+    input_path: str
+    output_path: str
+    target_mode: str          # auto | manual
+    roi_points: list          # optional
+    stabilize_strength: float # 0~1
+    border_strategy: str      # scale | mirror | inpaint
+    use_gpu: bool
+
+class TaskProgress:
+    task_id: str
+    stage: str                # QUEUED/PREPARING/TRACKING/...
+    percent: float            # 0~100
+    eta_sec: int
+    fps: float
+    status_text: str
+
+class StabilizerEngine:
+    def submit(req: TrackingRequest) -> str: ...
+    def pause(task_id: str) -> None: ...
+    def resume(task_id: str) -> None: ...
+    def cancel(task_id: str) -> None: ...
+    def preview_frame(task_id: str, frame_idx: int): ...
+```
+
+> 以上接口可先用 Python 实现 MVP，后续将计算密集模块迁移到 C++/CUDA。
+
+## 12. 直接可执行的技术选型（定版建议）
+
+### 12.1 技术栈（建议你直接按此落地）
+
+- **桌面端 UI**：PySide6（比 Tkinter 更适合复杂播放器 + 多任务队列 UI）。
+- **算法引擎**：Python + OpenCV + PyTorch/ONNX Runtime。
+- **视频编解码**：FFmpeg（命令行 + 管道）+ NVENC/NVDEC（NVIDIA）。
+- **任务调度**：`asyncio + multiprocessing`（UI 与计算进程隔离）。
+- **数据存储**：SQLite（项目配置、任务元数据、运行日志索引）。
+- **日志与监控**：结构化日志（JSON），关键指标写入 `metrics.jsonl`。
+
+### 12.2 运行模式（必须支持）
+
+- `AUTO`：AI 自动识别 + 自动跟踪 + 自动稳定。
+- `AUTO+MANUAL`：AI 初始化后，用户手动修正关键帧。
+- `MANUAL`：完全手动选部位后稳定（用于 AI 识别失败场景）。
+
+## 13. 目录结构（建议直接创建）
+
+```text
+stabilizer/
+  app/
+    main.py
+    ui/
+      pages/
+      widgets/
+  core/
+    pipeline/
+      orchestrator.py
+      stages.py
+    tracking/
+      detector.py
+      tracker.py
+    stabilize/
+      transform_solver.py
+      trajectory_filter.py
+      border_handler.py
+    preview/
+      preview_engine.py
+  infra/
+    ffmpeg/
+      decoder.py
+      encoder.py
+    scheduler/
+      task_queue.py
+      worker.py
+    storage/
+      project_repo.py
+      task_repo.py
+  tests/
+```
+
+## 14. 关键 API 细化（前后端/模块联调用）
+
+### 14.1 创建任务
+
+```json
+POST /tasks
+{
+  "input_path": "xxx.mp4",
+  "output_path": "yyy.mp4",
+  "mode": "AUTO+MANUAL",
+  "roi": [{"x":100,"y":120}, {"x":260,"y":120}, {"x":260,"y":300}, {"x":100,"y":300}],
+  "stabilize_strength": 0.72,
+  "border_strategy": "scale",
+  "use_gpu": true
+}
+```
+
+### 14.2 任务状态（用于 UI 进度条和状态标签）
+
+```json
+GET /tasks/{task_id}
+{
+  "task_id": "t_001",
+  "stage": "TRACKING",
+  "percent": 46.3,
+  "eta_sec": 51,
+  "fps": 87.4,
+  "retry_count": 0,
+  "black_border_risk": 0.08
+}
+```
+
+### 14.3 关键帧修正（手动选部位核心能力）
+
+```json
+POST /tasks/{task_id}/keyframes
+{
+  "frame_index": 245,
+  "roi": [{"x":130,"y":110}, {"x":280,"y":110}, {"x":280,"y":320}, {"x":130,"y":320}]
+}
+```
+
+## 15. 多任务与 GPU 调度策略（可直接开发）
+
+- GPU Worker 池建议：
+  - 6GB 显存：并发 1；
+  - 8~12GB 显存：并发 2；
+  - >12GB 显存：并发 3（1080p 默认）。
+- 调度规则：
+  1. `ENCODING` 阶段优先复用 NVENC；
+  2. 显存不足触发“降级队列”（降分辨率推理或切 CPU）；
+  3. 单任务连续失败 2 次后标记 `FAILED_NEEDS_MANUAL`。
+- 任务重试：
+  - 第一次失败：降低模型输入尺寸（如 1280->960）；
+  - 第二次失败：切换追踪器（Siamese -> CSRT）；
+  - 第三次失败：暂停并提示用户添加手动关键帧。
+
+## 16. 验收标准（你可以直接给团队执行）
+
+- **功能验收**：
+  - 支持自动识别、手动部位选择、实时预览、任务进度百分比和状态机显示；
+  - 支持黑边处理三策略；
+  - 支持批量任务和暂停/继续/取消/重试。
+- **性能验收**：
+  - 1080p/30fps，3 分钟视频，GPU 模式总处理时长 ≤ 1.2x 实时；
+  - 预览延迟 ≤ 120ms；
+  - 常规场景跟踪稳定成功率 ≥ 95%。
+- **稳定性验收**：
+  - 连续跑 50 条视频任务，失败率 ≤ 5%；
+  - OOM 时无崩溃，能够自动降级并记录日志。
+
+## 17. 4 周排期（可直接执行）
+
+- **第 1 周**：
+  - 完成任务队列、状态机、FFmpeg 解码/编码打通；
+  - UI 完成任务列表 + 进度条 + 状态标签。
+- **第 2 周**：
+  - 完成自动检测 + 跟踪 + 基础稳定（CPU 跑通）；
+  - 加入手动 ROI 与关键帧修正。
+- **第 3 周**：
+  - 接入 GPU 推理与 NVENC；
+  - 完成实时预览与参数热更新。
+- **第 4 周**：
+  - 完成防黑边策略、失败重试策略、质量报告；
+  - 回归测试 + 性能压测 + 交付文档。
+
 ---
 
-如果你愿意，我可以下一步直接给你：
-- **技术选型对比表（Python / C++ / Rust）**，
-- **模块级接口定义（类图 + API）**，
-- **第一版代码骨架（可直接开工）**。
+这版就是“可直接执行”的版本，你可以按第 13~17 节直接拆任务开工。
